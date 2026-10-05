@@ -11,13 +11,14 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.miller.millerdoor
         PRODUCT_NAME: MillerDoor
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "2.0"
+        CURRENT_PROJECT_VERSION: "2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: MillerDoor
         UILaunchScreen: {}
-        NSLocalNetworkUsageDescription: Talks to your door controller on the local network.
+        NSLocalNetworkUsageDescription: Talks to your door controllers on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
