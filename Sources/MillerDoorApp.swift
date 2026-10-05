@@ -311,6 +311,7 @@ struct ContentView: View {
     @StateObject private var store = DoorStore()
     @State private var pending: Pending?
     @State private var showSettings = false
+    @State private var availH: CGFloat = 600
 
     private var shown: [Controller] { store.controllers.filter { $0.configured && !$0.validDoors.isEmpty } }
     private var allDoors: [(Controller, Door)] { shown.flatMap { c in c.validDoors.map { (c, $0) } } }
@@ -328,7 +329,7 @@ struct ContentView: View {
                     .animation(.easeInOut(duration: 0.8), value: openCount)
 
                 ScrollView {
-                    VStack(spacing: 20) {
+                    VStack(spacing: 16) {
                         if shown.isEmpty { emptyState } else {
                             header
                             ForEach(shown) { c in group(c) }
@@ -338,6 +339,11 @@ struct ContentView: View {
                     .padding()
                 }
                 .refreshable { await store.refresh() }
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { availH = g.size.height }
+                        .onChange(of: g.size.height) { availH = $0 }
+                })
                 .alert(pending.map { "\(store.isOpen($0.controller, $0.door) == true ? "Close" : "Open") \($0.door.name)?" } ?? "",
                        isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
                        presenting: pending) { p in
@@ -368,6 +374,14 @@ struct ContentView: View {
         }
     }
 
+    /// Sizes the door boxes so every door fits on screen at once.
+    private var cardHeight: CGFloat {
+        let g = CGFloat(shown.count)
+        let rows = CGFloat(shown.reduce(0) { $0 + ($1.validDoors.count + 1) / 2 })
+        let overhead: CGFloat = 32 + 30 + 56 + (g + 1) * 16 + g * 28 + max(rows - g, 0) * 12 + 12
+        return min(150, max(64, (availH - overhead) / max(rows, 1)))
+    }
+
     private func tap(_ c: Controller, _ d: Door) {
         if store.confirmActions { pending = Pending(controller: c, door: d) }
         else {
@@ -388,9 +402,9 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 4)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible())], spacing: 14) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())], spacing: 12) {
                 ForEach(c.validDoors) { d in
-                    DoorCard(door: d, isOpen: store.isOpen(c, d), busy: store.busy.contains(d.id)) { tap(c, d) }
+                    DoorCard(door: d, isOpen: store.isOpen(c, d), busy: store.busy.contains(d.id), height: cardHeight) { tap(c, d) }
                 }
             }
         }
@@ -399,17 +413,21 @@ struct ContentView: View {
     private var refreshButton: some View {
         VStack(spacing: 6) {
             Button { Task { await store.refresh() } } label: {
-                HStack {
-                    if store.refreshing { ProgressView() } else { Image(systemName: "arrow.clockwise") }
-                    Text("Refresh status")
-                }.frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    ZStack {
+                        Image(systemName: "arrow.clockwise").opacity(store.refreshing ? 0 : 1)
+                        ProgressView().controlSize(.small).opacity(store.refreshing ? 1 : 0)
+                    }
+                    .frame(width: 16, height: 16)
+                    Text("Refresh").font(.subheadline.weight(.semibold))
+                }
+                .frame(width: 120, height: 34)
             }
-            .buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black)
-            if let t = store.lastUpdate {
-                Text("Updated \(t.formatted(date: .omitted, time: .standard))")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }.padding(.top, 6)
+            .buttonStyle(.borderedProminent).foregroundStyle(.black)
+            Text(store.lastUpdate.map { "Updated \($0.formatted(date: .omitted, time: .standard))" } ?? " ")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .frame(height: 14)
+        }
     }
 
     private var emptyState: some View {
@@ -433,38 +451,78 @@ struct ContentView: View {
     }
 }
 
+struct StatusLabel: View {
+    let isOpen: Bool?
+    @State private var dim = false
+
+    private var color: Color { isOpen == nil ? .gray : (isOpen! ? .red : .green) }
+
+    var body: some View {
+        Text(isOpen == nil ? "Unknown" : (isOpen! ? "OPEN" : "Closed"))
+            .font(isOpen == true ? .title3.weight(.heavy) : .subheadline.weight(.bold))
+            .foregroundStyle(color)
+            .opacity(isOpen == true && dim ? 0.15 : 1)
+            .onAppear { update() }
+            .onChange(of: isOpen) { _ in update() }
+    }
+
+    private func update() {
+        if isOpen == true {
+            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { dim = true }
+        } else {
+            withAnimation(.linear(duration: 0.01)) { dim = false }
+        }
+    }
+}
+
 struct DoorCard: View {
     let door: Door
     let isOpen: Bool?
     let busy: Bool
+    let height: CGFloat
     let action: () -> Void
     private var color: Color { isOpen == nil ? .gray : (isOpen! ? .red : .green) }
+    private var icon: String { isOpen == true ? "door.left.hand.open" : "door.left.hand.closed" }
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Image(systemName: isOpen == true ? "door.left.hand.open" : "door.left.hand.closed")
-                        .font(.title).foregroundStyle(color)
-                    Spacer()
-                    if busy { ProgressView() }
+            Group {
+                if height < 100 {
+                    HStack(spacing: 10) {
+                        Image(systemName: icon).font(.title3).foregroundStyle(color)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(door.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                            StatusLabel(isOpen: isOpen)
+                        }
+                        Spacer(minLength: 0)
+                        if busy { ProgressView() }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: icon).font(.title2).foregroundStyle(color)
+                            Spacer()
+                            if busy { ProgressView() }
+                        }
+                        Spacer(minLength: 0)
+                        Text(door.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                        StatusLabel(isOpen: isOpen)
+                        if height >= 130 {
+                            Text(isOpen == true ? "Tap to close" : "Tap to open")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                Spacer(minLength: 20)
-                Text(door.name).font(.headline).foregroundStyle(.primary)
-                Text(isOpen == nil ? "Unknown" : (isOpen! ? "OPEN" : "Closed"))
-                    .font(.subheadline.weight(.bold)).foregroundStyle(color)
-                Text(isOpen == true ? "Tap to close" : "Tap to open")
-                    .font(.caption).foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
-            .padding(16)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(color.opacity(0.6), lineWidth: 1.5))
-            .shadow(color: color.opacity(0.35), radius: 12, y: 4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(height < 100 ? 12 : 14)
+            .frame(height: height)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(color.opacity(0.6), lineWidth: 1.5))
+            .shadow(color: color.opacity(0.3), radius: 10, y: 3)
         }
         .buttonStyle(.plain)
         .disabled(busy)
-        .animation(.easeInOut, value: isOpen)
     }
 }
 
@@ -527,6 +585,8 @@ struct SettingsView: View {
 struct ControllerEditor: View {
     @Binding var controller: Controller
     @ObservedObject var store: DoorStore
+    private let maxDoors = 7
+    private var totalDoors: Int { store.controllers.reduce(0) { $0 + $1.doors.count } }
 
     var body: some View {
         Form {
@@ -574,7 +634,11 @@ struct ControllerEditor: View {
                 .onDelete { controller.doors.remove(atOffsets: $0) }
                 .onMove { controller.doors.move(fromOffsets: $0, toOffset: $1) }
 
-                Button { controller.doors.append(Door()) } label: { Label("Add door", systemImage: "plus.circle.fill") }
+                if totalDoors >= maxDoors {
+                    Text("Maximum of \(maxDoors) doors reached.").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Button { controller.doors.append(Door()) } label: { Label("Add door", systemImage: "plus.circle.fill") }
+                }
             }
         }
         .navigationTitle(controller.name)
